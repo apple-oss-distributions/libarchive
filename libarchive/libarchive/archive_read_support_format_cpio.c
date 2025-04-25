@@ -25,7 +25,6 @@
  */
 
 #include "archive_platform.h"
-__FBSDID("$FreeBSD: head/lib/libarchive/archive_read_support_format_cpio.c 201163 2009-12-29 05:50:34Z kientzle $");
 
 #ifdef HAVE_ERRNO_H
 #include <errno.h>
@@ -452,7 +451,7 @@ archive_read_format_cpio_read_header(struct archive_read *a,
 
 	/* Compare name to "TRAILER!!!" to test for end-of-archive. */
 	if (namelength == 11 && strncmp((const char *)h, "TRAILER!!!",
-	    11) == 0) {
+	    10) == 0) {
 		/* TODO: Store file location of start of block. */
 		archive_clear_error(&a->archive);
 		return (ARCHIVE_EOF);
@@ -846,6 +845,7 @@ static int
 header_afiol(struct archive_read *a, struct cpio *cpio,
     struct archive_entry *entry, size_t *namelength, size_t *name_pad)
 {
+	int64_t t;
 	const void *h;
 	const char *header;
 
@@ -862,7 +862,12 @@ header_afiol(struct archive_read *a, struct cpio *cpio,
 
 	archive_entry_set_dev(entry, 
 		(dev_t)atol16(header + afiol_dev_offset, afiol_dev_size));
-	archive_entry_set_ino(entry, atol16(header + afiol_ino_offset, afiol_ino_size));
+	t = atol16(header + afiol_ino_offset, afiol_ino_size);
+	if (t < 0) {
+		archive_set_error(&a->archive, 0, "Nonsensical ino value");
+		return (ARCHIVE_FATAL);
+	}
+	archive_entry_set_ino(entry, t);
 	archive_entry_set_mode(entry,
 		(mode_t)atol8(header + afiol_mode_offset, afiol_mode_size));
 	archive_entry_set_uid(entry, atol16(header + afiol_uid_offset, afiol_uid_size));
@@ -875,8 +880,12 @@ header_afiol(struct archive_read *a, struct cpio *cpio,
 	*namelength = (size_t)atol16(header + afiol_namesize_offset, afiol_namesize_size);
 	*name_pad = 0; /* No padding of filename. */
 
-	cpio->entry_bytes_remaining =
-	    atol16(header + afiol_filesize_offset, afiol_filesize_size);
+	t = atol16(header + afiol_filesize_offset, afiol_filesize_size);
+	if (t < 0) {
+		archive_set_error(&a->archive, 0, "Nonsensical file size");
+		return (ARCHIVE_FATAL);
+	}
+	cpio->entry_bytes_remaining = t;
 	archive_entry_set_size(entry, cpio->entry_bytes_remaining);
 	cpio->entry_padding = 0;
 	__archive_read_consume(a, afiol_header_size);
@@ -996,14 +1005,14 @@ archive_read_format_cpio_cleanup(struct archive_read *a)
 static int64_t
 le4(const unsigned char *p)
 {
-	return ((p[0] << 16) + (((int64_t)p[1]) << 24) + (p[2] << 0) + (p[3] << 8));
+	return ((p[0] << 16) | (((int64_t)p[1]) << 24) | (p[2] << 0) | (p[3] << 8));
 }
 
 
 static int64_t
 be4(const unsigned char *p)
 {
-	return ((((int64_t)p[0]) << 24) + (p[1] << 16) + (p[2] << 8) + (p[3]));
+	return ((((int64_t)p[0]) << 24) | (p[1] << 16) | (p[2] << 8) | (p[3]));
 }
 
 /*
@@ -1014,7 +1023,7 @@ be4(const unsigned char *p)
 static int64_t
 atol8(const char *p, unsigned char_cnt)
 {
-	int64_t l;
+	uint64_t l;
 	int digit;
 
 	l = 0;
@@ -1022,18 +1031,18 @@ atol8(const char *p, unsigned char_cnt)
 		if (*p >= '0' && *p <= '7')
 			digit = *p - '0';
 		else
-			return (l);
+			return ((int64_t)l);
 		p++;
 		l <<= 3;
 		l |= digit;
 	}
-	return (l);
+	return ((int64_t)l);
 }
 
 static int64_t
 atol16(const char *p, unsigned char_cnt)
 {
-	int64_t l;
+	uint64_t l;
 	int digit;
 
 	l = 0;
@@ -1045,12 +1054,12 @@ atol16(const char *p, unsigned char_cnt)
 		else if (*p >= '0' && *p <= '9')
 			digit = *p - '0';
 		else
-			return (l);
+			return ((int64_t)l);
 		p++;
 		l <<= 4;
 		l |= digit;
 	}
-	return (l);
+	return ((int64_t)l);
 }
 
 static int
